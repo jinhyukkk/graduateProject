@@ -1,0 +1,34 @@
+# SC-TSQL 의존성
+# Python 3.10+ 권장
+
+# OpenAI API (LLM + 임베딩)
+openai==1.51.0
+
+# NLI 모델 (Semantic Consistency Verifier)
+transformers==4.44.2
+torch==2.4.1
+sentence-transformers==3.1.1
+
+# 데이터 처리
+numpy==1.26.4
+pandas==2.2.3
+datasets==3.0.1
+
+# Spider/BIRD 데이터 로딩 및 SQLite 실행
+# sqlite3는 Python 표준 라이브러리 (별도 설치 불필요)
+sqlparse==0.5.1
+
+# 설정 파일 처리
+PyYAML==6.0.2
+
+# 진행 표시
+tqdm==4.66.5
+
+# 임베딩 저장/로드
+faiss-cpu==1.8.0
+
+# 평가 유틸리티
+scikit-learn==1.5.2
+
+# 로깅
+loguru==0.7.2

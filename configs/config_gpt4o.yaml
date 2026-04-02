@@ -1,0 +1,30 @@
+llm:
+  model: "gpt-4o-2024-11-20"
+  temperature: 0.0
+  max_tokens: 1024
+
+embedding:
+  model: "text-embedding-3-large"
+
+schema_linker:
+  top_k_tables: 10
+  top_k_columns: 30
+
+sql_generator:
+  few_shot_k: 3
+
+correction:
+  max_rounds: 3
+  semantic_threshold: 0.75
+
+nli:
+  model: "cross-encoder/nli-deberta-v3-base"
+
+evaluation:
+  datasets: ["spider", "bird"]
+  spider_dev_path: "data/raw/spider/dev.json"
+  bird_dev_path: "data/raw/bird/dev.json"
+
+output:
+  results_dir: "outputs/logs/"
+  checkpoint_dir: "outputs/checkpoints/"

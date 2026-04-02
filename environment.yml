@@ -1,0 +1,22 @@
+name: sc_tsql_env
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - openai==1.51.0
+    - transformers==4.44.2
+    - torch==2.4.1
+    - sentence-transformers==3.1.1
+    - numpy==1.26.4
+    - pandas==2.2.3
+    - datasets==3.0.1
+    - sqlparse==0.5.1
+    - PyYAML==6.0.2
+    - tqdm==4.66.5
+    - faiss-cpu==1.8.0
+    - scikit-learn==1.5.2
+    - loguru==0.7.2
