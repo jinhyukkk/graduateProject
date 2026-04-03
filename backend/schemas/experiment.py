@@ -5,14 +5,28 @@ Pydantic schemas for /api/experiments endpoints.
 from pydantic import BaseModel, Field
 
 
+# ── Ablation flags ──
+
+class AblationFlags(BaseModel):
+    disable_schema_linker: bool = False
+    disable_execution_validator: bool = False
+    disable_semantic_verifier: bool = False
+    disable_correction_loop: bool = False
+
+
 # ── Experiment creation ──
 
 class ExperimentCreateRequest(BaseModel):
-    dataset: str = Field(..., description="spider | bird")
+    dataset: str = Field(..., description="hrdb | bird")
     model: str | None = Field(default=None, description="LLM model name")
-    max_rounds: int = Field(default=3, ge=1, le=5)
+    max_rounds: int = Field(default=3, ge=0, le=5)
     semantic_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     sample_count: int | None = Field(default=None, ge=1)
+    pipeline_mode: str | None = Field(
+        default=None,
+        description="Preset: zero-shot | din-sql | dail-sql | chess | sc-tsql",
+    )
+    ablation: AblationFlags | None = None
 
 
 class ExperimentConfig(BaseModel):
@@ -21,6 +35,34 @@ class ExperimentConfig(BaseModel):
     max_rounds: int
     semantic_threshold: float
     sample_count: int | None = None
+    pipeline_mode: str | None = None
+    ablation: AblationFlags | None = None
+
+
+# ── K-Sweep batch ──
+
+class KSweepRequest(BaseModel):
+    dataset: str = Field(..., description="hrdb | bird")
+    model: str | None = Field(default=None, description="LLM model name")
+    semantic_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    sample_count: int | None = Field(default=None, ge=1)
+    k_values: list[int] = Field(default=[0, 1, 2, 3, 4, 5])
+
+
+class BatchExperimentResponse(BaseModel):
+    batch_id: str
+    experiment_ids: list[str]
+    k_values: list[int]
+    status: str
+
+
+class BatchStatusResponse(BaseModel):
+    batch_id: str
+    status: str  # running | completed | failed
+    k_values: list[int]
+    experiment_ids: list[str]
+    current_k: int | None = None
+    completed_count: int = 0
 
 
 class ExperimentCreateResponse(BaseModel):

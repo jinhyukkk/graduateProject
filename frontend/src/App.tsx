@@ -6,6 +6,7 @@ import QueryPage from './pages/QueryPage';
 import ExperimentPage from './pages/ExperimentPage';
 import ResultsPage from './pages/ResultsPage';
 import QueryDetailPage from './pages/QueryDetailPage';
+import ComparisonPage from './pages/ComparisonPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +39,7 @@ export default function App() {
                 path="/results/:id/query/:qid"
                 element={<QueryDetailPage />}
               />
+              <Route path="/comparison" element={<ComparisonPage />} />
             </Routes>
           </AppLayout>
         </BrowserRouter>

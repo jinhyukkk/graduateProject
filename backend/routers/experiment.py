@@ -7,6 +7,8 @@ import asyncio
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from backend.schemas.experiment import (
+    BatchExperimentResponse,
+    BatchStatusResponse,
     ExperimentCreateRequest,
     ExperimentCreateResponse,
     ExperimentConfig,
@@ -16,14 +18,18 @@ from backend.schemas.experiment import (
     ExperimentQueryDetail,
     ExperimentResultItem,
     ExperimentResultsResponse,
+    KSweepRequest,
     MetricsSummary,
 )
 from backend.services.tsql_service import (
     create_experiment,
+    create_k_sweep,
+    get_batch,
     get_experiment,
     is_experiment_running,
     list_experiments,
     run_experiment,
+    run_k_sweep,
 )
 
 router = APIRouter(tags=["experiment"])
@@ -34,8 +40,8 @@ router = APIRouter(tags=["experiment"])
 @router.post("/api/experiments", response_model=ExperimentCreateResponse, status_code=201)
 async def create_new_experiment(req: ExperimentCreateRequest, background_tasks: BackgroundTasks):
     """Create a new experiment and start evaluation in the background."""
-    if req.dataset not in ("spider", "bird"):
-        raise HTTPException(status_code=422, detail="Invalid dataset. Must be 'spider' or 'bird'")
+    if req.dataset not in ("hrdb", "bird"):
+        raise HTTPException(status_code=422, detail="Invalid dataset. Must be 'hrdb' or 'bird'")
 
     if is_experiment_running():
         raise HTTPException(status_code=409, detail="An experiment is already running")
@@ -47,6 +53,8 @@ async def create_new_experiment(req: ExperimentCreateRequest, background_tasks: 
             max_rounds=req.max_rounds,
             semantic_threshold=req.semantic_threshold,
             sample_count=req.sample_count,
+            pipeline_mode=req.pipeline_mode,
+            ablation=req.ablation.model_dump() if req.ablation else None,
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -63,6 +71,57 @@ async def create_new_experiment(req: ExperimentCreateRequest, background_tasks: 
         config=ExperimentConfig(**exp.config),
         created_at=exp.created_at,
         total_samples=exp.total_samples,
+    )
+
+
+# ── POST /api/experiments/k-sweep ──
+
+@router.post("/api/experiments/k-sweep", response_model=BatchExperimentResponse, status_code=201)
+async def create_k_sweep_experiment(req: KSweepRequest):
+    """Create a K-sweep batch experiment (runs K=0,1,2,...,5 sequentially)."""
+    if req.dataset not in ("hrdb", "bird"):
+        raise HTTPException(status_code=422, detail="Invalid dataset. Must be 'hrdb' or 'bird'")
+
+    if is_experiment_running():
+        raise HTTPException(status_code=409, detail="An experiment is already running")
+
+    try:
+        batch = create_k_sweep(
+            dataset=req.dataset,
+            model=req.model,
+            semantic_threshold=req.semantic_threshold,
+            sample_count=req.sample_count,
+            k_values=req.k_values,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    asyncio.create_task(run_k_sweep(batch.batch_id))
+
+    return BatchExperimentResponse(
+        batch_id=batch.batch_id,
+        experiment_ids=batch.experiment_ids,
+        k_values=batch.k_values,
+        status=batch.status,
+    )
+
+
+# ── GET /api/experiments/batch/{batch_id} ──
+
+@router.get("/api/experiments/batch/{batch_id}", response_model=BatchStatusResponse)
+async def get_batch_status(batch_id: str):
+    """Return batch (K-sweep) status."""
+    batch = get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    return BatchStatusResponse(
+        batch_id=batch.batch_id,
+        status=batch.status,
+        k_values=batch.k_values,
+        experiment_ids=batch.experiment_ids,
+        current_k=batch.current_k,
+        completed_count=batch.completed_count,
     )
 
 

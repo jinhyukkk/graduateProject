@@ -1,6 +1,6 @@
 """
 메인 평가 스크립트.
-Spider dev set / BIRD dev set에 대해 SC-TSQL 파이프라인을 실행하고
+HR-DB / BIRD dev set에 대해 SC-TSQL 파이프라인을 실행하고
 EX, CSR, Avg Latency를 출력한다.
 """
 
@@ -18,10 +18,10 @@ from src.execution_validator import ExecutionValidator
 from src.metrics import execution_accuracy, correction_success_rate, average_latency
 
 
-def load_spider_dev(dev_path: str) -> list[dict]:
+def load_hrdb_dev(dev_path: str) -> list[dict]:
     """
-    Spider dev set을 로드한다.
-    각 항목: {"question": str, "query": str, "db_id": str}
+    HR-DB dev set을 로드한다.
+    각 항목: {"question": str, "SQL": str, "db_id": "hrdb", "difficulty": str}
     """
     with open(dev_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -29,8 +29,9 @@ def load_spider_dev(dev_path: str) -> list[dict]:
     for item in data:
         examples.append({
             "question": item["question"],
-            "gold_sql": item["query"],
-            "db_id": item["db_id"],
+            "gold_sql": item.get("SQL", item.get("query", "")),
+            "db_id": item.get("db_id", "hrdb"),
+            "difficulty": item.get("difficulty", ""),
         })
     return examples
 
@@ -54,9 +55,8 @@ def load_bird_dev(dev_path: str) -> list[dict]:
 
 def get_db_path(dataset: str, db_id: str, config: dict) -> str:
     """데이터셋과 db_id로 SQLite DB 파일 경로를 반환한다."""
-    if dataset == "spider":
-        base_dir = os.path.dirname(config["evaluation"]["spider_dev_path"])
-        return os.path.join(base_dir, "database", db_id, f"{db_id}.sqlite")
+    if dataset == "hrdb":
+        return config["evaluation"]["hrdb_db_path"]
     elif dataset == "bird":
         base_dir = os.path.dirname(config["evaluation"]["bird_dev_path"])
         return os.path.join(base_dir, "databases", db_id, f"{db_id}.sqlite")
@@ -80,13 +80,11 @@ def execute_gold_sql(sql: str, db_path: str) -> list[tuple]:
 def load_few_shot_examples(dataset: str, config: dict) -> list[dict]:
     """
     Few-shot 후보를 학습 데이터에서 로드한다.
-    Spider: train set, BIRD: train set.
+    HR-DB: dev set 자체를 활용 (leave-one-out), BIRD: train set.
     """
-    if dataset == "spider":
-        train_path = os.path.join(
-            os.path.dirname(config["evaluation"]["spider_dev_path"]),
-            "train_spider.json",
-        )
+    if dataset == "hrdb":
+        # HR-DB는 별도 train set이 없으므로 dev set을 few-shot 후보로 사용
+        train_path = config["evaluation"]["hrdb_dev_path"]
     elif dataset == "bird":
         train_path = os.path.join(
             os.path.dirname(config["evaluation"]["bird_dev_path"]),
@@ -121,8 +119,8 @@ def run_evaluation(config: dict, dataset: str):
     print()
 
     # 데이터 로드
-    if dataset == "spider":
-        examples = load_spider_dev(config["evaluation"]["spider_dev_path"])
+    if dataset == "hrdb":
+        examples = load_hrdb_dev(config["evaluation"]["hrdb_dev_path"])
     elif dataset == "bird":
         examples = load_bird_dev(config["evaluation"]["bird_dev_path"])
     else:
@@ -273,9 +271,9 @@ def main():
     parser.add_argument(
         "--dataset",
         type=str,
-        choices=["spider", "bird"],
-        default="spider",
-        help="Dataset to evaluate on (spider or bird)",
+        choices=["hrdb", "bird"],
+        default="hrdb",
+        help="Dataset to evaluate on (hrdb or bird)",
     )
     args = parser.parse_args()
 

@@ -32,7 +32,7 @@ async def health_check():
 @router.get("/config", response_model=ConfigResponse)
 async def get_config():
     """Return current system configuration."""
-    spider_count = _estimate_sample_count("spider", None)
+    hrdb_count = _estimate_sample_count("hrdb", None)
     bird_count = _estimate_sample_count("bird", None)
 
     return ConfigResponse(
@@ -47,7 +47,7 @@ async def get_config():
         },
         available_models=AVAILABLE_MODELS,
         available_datasets=[
-            {"id": "spider", "label": "Spider", "dev_count": spider_count},
+            {"id": "hrdb", "label": "HR-DB", "dev_count": hrdb_count},
             {"id": "bird", "label": "BIRD", "dev_count": bird_count},
         ],
     )

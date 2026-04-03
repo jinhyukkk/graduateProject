@@ -4,6 +4,7 @@ import {
   SearchOutlined,
   ExperimentOutlined,
   BarChartOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -13,6 +14,7 @@ const menuItems = [
   { key: '/', icon: <SearchOutlined />, label: 'Query' },
   { key: '/experiment', icon: <ExperimentOutlined />, label: 'Experiment' },
   { key: '/results', icon: <BarChartOutlined />, label: 'Results' },
+  { key: '/comparison', icon: <SwapOutlined />, label: 'Compare' },
 ];
 
 interface AppLayoutProps {

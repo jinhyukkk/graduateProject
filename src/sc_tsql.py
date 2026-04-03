@@ -3,6 +3,8 @@ SC-TSQL 메인 파이프라인 (Section 4 전체)
 Schema Linker → SQL Generator → Self-Correction Loop → Result Explainer
 """
 
+import json
+import sqlite3
 import time
 from dataclasses import dataclass, field
 
@@ -12,6 +14,15 @@ from src.execution_validator import ExecutionValidator, ValidationResult
 from src.semantic_verifier import SemanticVerifier, VerificationResult
 from src.corrector import Corrector
 from src.result_explainer import ResultExplainer
+
+
+@dataclass
+class AblationFlags:
+    """어블레이션 실험용 구성요소 비활성화 플래그."""
+    disable_schema_linker: bool = False
+    disable_execution_validator: bool = False
+    disable_semantic_verifier: bool = False
+    disable_correction_loop: bool = False
 
 
 @dataclass
@@ -43,24 +54,74 @@ class SCTSQL:
       4. ResultExplainer.explain()  — Section 4.5
     """
 
-    def __init__(self, db_path: str, config: dict, few_shot_examples: list[dict] | None = None):
+    def __init__(
+        self,
+        db_path: str,
+        config: dict,
+        few_shot_examples: list[dict] | None = None,
+        ablation: AblationFlags | None = None,
+    ):
         """
         Args:
             db_path: SQLite 데이터베이스 파일 경로
             config: configs/config.yaml에서 로드된 설정
             few_shot_examples: SQL Generator용 few-shot 후보 리스트
+            ablation: 어블레이션 플래그 (None이면 모든 구성요소 활성화)
         """
         self.db_path = db_path
         self.config = config
+        self.ablation = ablation or AblationFlags()
         self.max_rounds = config["correction"]["max_rounds"]  # K=3, Section 4.4
 
-        # 모듈 초기화
-        self.schema_linker = SchemaLinker(db_path, config)
+        # 교정 루프 비활성화 시 max_rounds=0으로 강제
+        if self.ablation.disable_correction_loop:
+            self.max_rounds = 0
+
+        # 모듈 초기화 (어블레이션으로 비활성화된 모듈도 초기화하되, run()에서 스킵)
+        if not self.ablation.disable_schema_linker:
+            self.schema_linker = SchemaLinker(db_path, config)
+        else:
+            self.schema_linker = None
         self.sql_generator = SQLGenerator(config, few_shot_examples)
         self.execution_validator = ExecutionValidator()
         self.semantic_verifier = SemanticVerifier(config)
         self.corrector = Corrector(config)
         self.result_explainer = ResultExplainer(config)
+
+    def _fallback_schema_context(self) -> dict:
+        """스키마 링커 비활성화 시 전체 스키마를 직접 읽어 반환한다."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+        )
+        tables = [row[0] for row in cursor.fetchall()]
+
+        all_columns = {}
+        fk_list = []
+        schema_lines = []
+        for table in tables:
+            cursor.execute(f"PRAGMA table_info(`{table}`);")
+            cols = [col[1] for col in cursor.fetchall()]
+            all_columns[table] = cols
+
+            col_defs = ", ".join(f"{c} TEXT" for c in cols)
+            schema_lines.append(f"CREATE TABLE {table} ({col_defs});")
+
+            cursor.execute(f"PRAGMA foreign_key_list(`{table}`);")
+            for fk in cursor.fetchall():
+                fk_list.append({
+                    "from": f"{table}.{fk[3]}",
+                    "to": f"{fk[2]}.{fk[4]}",
+                })
+
+        conn.close()
+        return {
+            "tables": tables,
+            "columns": all_columns,
+            "foreign_keys": fk_list,
+            "schema_text": "\n\n".join(schema_lines),
+        }
 
     def run(self, query: str) -> SCTSQLResult:
         """
@@ -76,22 +137,41 @@ class SCTSQL:
         correction_history = []
 
         # Step 1: Schema Linking (Section 4.2)
-        schema_context = self.schema_linker.link(query)
+        if self.schema_linker is not None:
+            schema_context = self.schema_linker.link(query)
+        else:
+            schema_context = self._fallback_schema_context()
 
         # Step 2: SQL Generation (Section 4.3)
         current_sql = self.sql_generator.generate(query, schema_context)
 
-        # Step 3: Self-Correction Loop (Section 4.4, 최대 K=3회)
+        # Step 3: Self-Correction Loop (Section 4.4, 최대 K회)
         validation_result = None
         verification_result = None
 
         for round_num in range(1, self.max_rounds + 1):
             # Section 4.4.1: 실행 기반 검증
-            validation_result = self.execution_validator.validate(current_sql, self.db_path)
+            if not self.ablation.disable_execution_validator:
+                validation_result = self.execution_validator.validate(current_sql, self.db_path)
+            else:
+                # 실행 검증 비활성화: 항상 성공으로 가정
+                validation_result = ValidationResult(
+                    success=True, results=[], column_names=[],
+                    error_type=None, error_message=None,
+                    is_empty=False, is_excessive=False, row_count=0,
+                )
 
             # Section 4.4.2: 의미론적 일관성 검증
-            # 실행 실패 시에도 의미 검증 수행 (역번역은 SQL 구조만으로 가능)
-            verification_result = self.semantic_verifier.verify(query, current_sql)
+            if not self.ablation.disable_semantic_verifier:
+                verification_result = self.semantic_verifier.verify(query, current_sql)
+            else:
+                # 의미 검증 비활성화: 항상 일치로 가정
+                verification_result = VerificationResult(
+                    back_translation="",
+                    similarity_score=1.0,
+                    is_consistent=True,
+                    mismatch_diagnosis=None,
+                )
 
             # 교정 필요 여부 판단
             needs_correction = self._needs_correction(validation_result, verification_result)

@@ -42,7 +42,7 @@ except ImportError:
 
 try:
     from evaluate import (
-        load_spider_dev,
+        load_hrdb_dev,
         load_bird_dev,
         get_db_path,
         execute_gold_sql,
@@ -72,43 +72,21 @@ CONFIG = load_config()
 # ────────────────────────────────────────────────────────────
 
 def scan_databases() -> list[dict]:
-    """Scan data/raw/{spider,bird} for SQLite database directories."""
+    """Scan data/raw/{hrdb,bird} for SQLite database files."""
     databases = []
     data_root = os.path.join(PROJECT_ROOT, "data", "raw")
 
-    # Spider: data/raw/spider/database/{db_id}/{db_id}.sqlite
-    spider_db_root = os.path.join(data_root, "spider", "database")
-    if os.path.isdir(spider_db_root):
-        for db_id in sorted(os.listdir(spider_db_root)):
-            db_dir = os.path.join(spider_db_root, db_id)
-            db_file = os.path.join(db_dir, f"{db_id}.sqlite")
-            if os.path.isfile(db_file):
-                table_count = _count_tables(db_file)
-                rel_path = os.path.relpath(db_file, PROJECT_ROOT)
-                databases.append({
-                    "id": db_id,
-                    "dataset": "spider",
-                    "table_count": table_count,
-                    "path": rel_path,
-                })
-
-    # Spider: also check data/raw/spider/{db_id}/{db_id}.sqlite (flat layout)
-    spider_root = os.path.join(data_root, "spider")
-    if os.path.isdir(spider_root):
-        for db_id in sorted(os.listdir(spider_root)):
-            db_dir = os.path.join(spider_root, db_id)
-            db_file = os.path.join(db_dir, f"{db_id}.sqlite")
-            if os.path.isdir(db_dir) and db_id != "database" and os.path.isfile(db_file):
-                # Avoid duplicates
-                if not any(d["id"] == db_id and d["dataset"] == "spider" for d in databases):
-                    table_count = _count_tables(db_file)
-                    rel_path = os.path.relpath(db_file, PROJECT_ROOT)
-                    databases.append({
-                        "id": db_id,
-                        "dataset": "spider",
-                        "table_count": table_count,
-                        "path": rel_path,
-                    })
+    # HR-DB: data/raw/hrdb/hrdb.sqlite (단일 DB)
+    hrdb_file = os.path.join(data_root, "hrdb", "hrdb.sqlite")
+    if os.path.isfile(hrdb_file):
+        table_count = _count_tables(hrdb_file)
+        rel_path = os.path.relpath(hrdb_file, PROJECT_ROOT)
+        databases.append({
+            "id": "hrdb",
+            "dataset": "hrdb",
+            "table_count": table_count,
+            "path": rel_path,
+        })
 
     # BIRD: data/raw/bird/dev_databases/{db_id}/{db_id}.sqlite
     bird_db_root = os.path.join(data_root, "bird", "dev_databases")
@@ -148,13 +126,8 @@ def resolve_db_path(dataset: str, db_id: str) -> str:
     """Resolve absolute path to a SQLite database file."""
     data_root = os.path.join(PROJECT_ROOT, "data", "raw")
 
-    if dataset == "spider":
-        # Try data/raw/spider/database/{db_id}/{db_id}.sqlite
-        path = os.path.join(data_root, "spider", "database", db_id, f"{db_id}.sqlite")
-        if os.path.isfile(path):
-            return path
-        # Fallback: data/raw/spider/{db_id}/{db_id}.sqlite
-        path = os.path.join(data_root, "spider", db_id, f"{db_id}.sqlite")
+    if dataset == "hrdb":
+        path = os.path.join(data_root, "hrdb", "hrdb.sqlite")
         if os.path.isfile(path):
             return path
     elif dataset == "bird":
@@ -213,7 +186,7 @@ def get_schema_info(db_path: str) -> dict:
 # Single query execution
 # ────────────────────────────────────────────────────────────
 
-def run_query(query: str, db_id: str, dataset: str = "spider") -> dict:
+def run_query(query: str, db_id: str, dataset: str = "hrdb") -> dict:
     """
     Execute the SC-TSQL pipeline for a single natural language query.
     Returns a dict matching the QueryResponse schema shape.
@@ -393,12 +366,11 @@ async def run_experiment(experiment_id: str):
         if not EVALUATE_AVAILABLE:
             raise RuntimeError("evaluate.py module not importable")
 
-        if dataset == "spider":
-            dev_path = config["evaluation"]["spider_dev_path"]
-            # Resolve relative path
+        if dataset == "hrdb":
+            dev_path = config["evaluation"]["hrdb_dev_path"]
             if not os.path.isabs(dev_path):
                 dev_path = os.path.join(PROJECT_ROOT, dev_path)
-            examples = load_spider_dev(dev_path)
+            examples = load_hrdb_dev(dev_path)
         elif dataset == "bird":
             dev_path = config["evaluation"]["bird_dev_path"]
             if not os.path.isabs(dev_path):
@@ -416,6 +388,13 @@ async def run_experiment(experiment_id: str):
 
         # Load few-shot examples
         few_shot_examples = load_few_shot_examples(dataset, config)
+
+        # Ablation 플래그 구성
+        ablation_dict = exp.config.get("ablation")
+        ablation_flags = None
+        if ablation_dict and SRC_AVAILABLE:
+            from src.sc_tsql import AblationFlags
+            ablation_flags = AblationFlags(**ablation_dict)
 
         # Evaluation loop
         pipeline_cache: dict[str, SCTSQL] = {}
@@ -445,7 +424,7 @@ async def run_experiment(experiment_id: str):
 
             if db_id not in pipeline_cache:
                 try:
-                    pipeline_cache[db_id] = SCTSQL(db_path, config, few_shot_examples)
+                    pipeline_cache[db_id] = SCTSQL(db_path, config, few_shot_examples, ablation=ablation_flags)
                 except Exception:
                     exp.current = i + 1
                     continue
@@ -680,12 +659,78 @@ async def run_experiment(experiment_id: str):
         _running_experiment_id = None
 
 
+def resolve_pipeline_preset(mode: str) -> dict:
+    """
+    파이프라인 프리셋을 ablation 플래그 + config 오버라이드로 변환한다.
+
+    | Mode      | schema_linker | few_shot | correction | semantic_verifier |
+    |-----------|--------------|----------|------------|------------------|
+    | zero-shot | OFF          | 0        | OFF        | OFF              |
+    | din-sql   | ON           | 0        | OFF        | OFF              |
+    | dail-sql  | ON           | 3        | OFF        | OFF              |
+    | chess     | ON           | 3        | ON (K=1)   | OFF              |
+    | sc-tsql   | ON           | 3        | ON (K=3)   | ON               |
+    """
+    presets = {
+        "zero-shot": {
+            "ablation": {
+                "disable_schema_linker": True,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": True,
+                "disable_correction_loop": True,
+            },
+            "max_rounds": 0,
+        },
+        "din-sql": {
+            "ablation": {
+                "disable_schema_linker": False,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": True,
+                "disable_correction_loop": True,
+            },
+            "max_rounds": 0,
+        },
+        "dail-sql": {
+            "ablation": {
+                "disable_schema_linker": False,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": True,
+                "disable_correction_loop": True,
+            },
+            "max_rounds": 0,
+        },
+        "chess": {
+            "ablation": {
+                "disable_schema_linker": False,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": True,
+                "disable_correction_loop": False,
+            },
+            "max_rounds": 1,
+        },
+        "sc-tsql": {
+            "ablation": {
+                "disable_schema_linker": False,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": False,
+                "disable_correction_loop": False,
+            },
+            "max_rounds": 3,
+        },
+    }
+    if mode not in presets:
+        raise ValueError(f"Unknown pipeline mode: {mode}. Must be one of {list(presets.keys())}")
+    return presets[mode]
+
+
 def create_experiment(
     dataset: str,
     model: str | None,
     max_rounds: int,
     semantic_threshold: float,
     sample_count: int | None,
+    pipeline_mode: str | None = None,
+    ablation: dict | None = None,
 ) -> ExperimentState:
     """Create a new experiment record and return it (does not start execution)."""
     global _running_experiment_id
@@ -693,8 +738,14 @@ def create_experiment(
     if _running_experiment_id is not None:
         raise ValueError("An experiment is already running")
 
-    if dataset not in ("spider", "bird"):
-        raise ValueError("Invalid dataset. Must be 'spider' or 'bird'")
+    if dataset not in ("hrdb", "bird"):
+        raise ValueError("Invalid dataset. Must be 'hrdb' or 'bird'")
+
+    # 프리셋 적용: pipeline_mode가 지정되면 ablation과 max_rounds를 오버라이드
+    if pipeline_mode:
+        preset = resolve_pipeline_preset(pipeline_mode)
+        ablation = preset["ablation"]
+        max_rounds = preset["max_rounds"]
 
     resolved_model = model or CONFIG["llm"]["model"]
     exp_id = f"exp_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
@@ -712,6 +763,8 @@ def create_experiment(
             "max_rounds": max_rounds,
             "semantic_threshold": semantic_threshold,
             "sample_count": sample_count,
+            "pipeline_mode": pipeline_mode,
+            "ablation": ablation,
         },
         created_at=datetime.now(timezone.utc).isoformat(),
         total_samples=total_samples,
@@ -725,8 +778,8 @@ def create_experiment(
 def _estimate_sample_count(dataset: str, sample_count: int | None) -> int:
     """Estimate the number of samples for a given dataset."""
     try:
-        if dataset == "spider":
-            dev_path = CONFIG["evaluation"]["spider_dev_path"]
+        if dataset == "hrdb":
+            dev_path = CONFIG["evaluation"]["hrdb_dev_path"]
             if not os.path.isabs(dev_path):
                 dev_path = os.path.join(PROJECT_ROOT, dev_path)
             if os.path.isfile(dev_path):
@@ -734,7 +787,7 @@ def _estimate_sample_count(dataset: str, sample_count: int | None) -> int:
                     data = json.load(f)
                 total = len(data)
             else:
-                total = 1034  # Default Spider dev count
+                total = 150  # Default HR-DB dev count
         elif dataset == "bird":
             dev_path = CONFIG["evaluation"]["bird_dev_path"]
             if not os.path.isabs(dev_path):
@@ -748,8 +801,143 @@ def _estimate_sample_count(dataset: str, sample_count: int | None) -> int:
         else:
             total = 0
     except Exception:
-        total = 1034 if dataset == "spider" else 1534
+        total = 150 if dataset == "hrdb" else 1534
 
     if sample_count is not None:
         return min(sample_count, total)
     return total
+
+
+# ────────────────────────────────────────────────────────────
+# K-Sweep batch management
+# ────────────────────────────────────────────────────────────
+
+@dataclass
+class BatchState:
+    """K-Sweep 배치 실험 상태."""
+    batch_id: str
+    k_values: list[int]
+    experiment_ids: list[str]
+    status: str  # "running" | "completed" | "failed"
+    current_k: int | None = None
+    completed_count: int = 0
+    ws_subscribers: list[Any] = dc_field(default_factory=list)
+
+
+_batches: dict[str, BatchState] = {}
+
+
+def get_batch(batch_id: str) -> BatchState | None:
+    return _batches.get(batch_id)
+
+
+def create_k_sweep(
+    dataset: str,
+    model: str | None,
+    semantic_threshold: float,
+    sample_count: int | None,
+    k_values: list[int],
+) -> BatchState:
+    """K-Sweep 배치를 생성한다. 각 K값에 대해 ExperimentState를 미리 만들어둔다."""
+    if _running_experiment_id is not None:
+        raise ValueError("An experiment is already running")
+
+    batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    experiment_ids = []
+
+    resolved_model = model or CONFIG["llm"]["model"]
+    total_samples = _estimate_sample_count(dataset, sample_count)
+
+    for k in sorted(k_values):
+        exp_id = f"{batch_id}_k{k}"
+        ablation = None
+        if k == 0:
+            ablation = {
+                "disable_schema_linker": False,
+                "disable_execution_validator": False,
+                "disable_semantic_verifier": False,
+                "disable_correction_loop": True,
+            }
+
+        exp = ExperimentState(
+            id=exp_id,
+            dataset=dataset,
+            status="pending",
+            config={
+                "dataset": dataset,
+                "model": resolved_model,
+                "max_rounds": k,
+                "semantic_threshold": semantic_threshold,
+                "sample_count": sample_count,
+                "pipeline_mode": None,
+                "ablation": ablation,
+            },
+            created_at=datetime.now(timezone.utc).isoformat(),
+            total_samples=total_samples,
+        )
+        _experiments[exp_id] = exp
+        experiment_ids.append(exp_id)
+
+    batch = BatchState(
+        batch_id=batch_id,
+        k_values=sorted(k_values),
+        experiment_ids=experiment_ids,
+        status="running",
+    )
+    _batches[batch_id] = batch
+    return batch
+
+
+async def run_k_sweep(batch_id: str):
+    """K-Sweep 배치의 각 실험을 순차적으로 실행한다."""
+    global _running_experiment_id
+
+    batch = _batches.get(batch_id)
+    if batch is None:
+        return
+
+    try:
+        for i, exp_id in enumerate(batch.experiment_ids):
+            exp = _experiments.get(exp_id)
+            if exp is None:
+                continue
+
+            batch.current_k = batch.k_values[i]
+            exp.status = "running"
+            _running_experiment_id = exp_id
+
+            # Broadcast batch progress
+            for ws in batch.ws_subscribers:
+                try:
+                    await ws.send_json({
+                        "type": "batch_progress",
+                        "batch_id": batch_id,
+                        "current_k": batch.current_k,
+                        "completed_count": batch.completed_count,
+                        "total_k": len(batch.k_values),
+                    })
+                except Exception:
+                    pass
+
+            await run_experiment(exp_id)
+
+            batch.completed_count = i + 1
+
+        batch.status = "completed"
+    except Exception as e:
+        batch.status = "failed"
+    finally:
+        _running_experiment_id = None
+        batch.current_k = None
+
+        # Broadcast batch completed
+        for ws in batch.ws_subscribers:
+            try:
+                await ws.send_json({
+                    "type": "batch_completed",
+                    "batch_id": batch_id,
+                    "status": batch.status,
+                    "experiment_ids": batch.experiment_ids,
+                })
+            except Exception:
+                pass

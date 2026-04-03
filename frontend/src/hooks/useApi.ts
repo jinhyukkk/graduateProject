@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation } from '@tanstack/react-query';
 import type {
   DatabasesResponse,
   QueryResult,
@@ -8,6 +8,8 @@ import type {
   ExperimentResultsResponse,
   ExperimentCreateResponse,
   ExperimentConfig,
+  KSweepConfig,
+  BatchExperiment,
   QueryDetailResult,
 } from '../types';
 
@@ -163,5 +165,43 @@ export function useCreateExperiment() {
         method: 'POST',
         body: JSON.stringify(config),
       }),
+  });
+}
+
+// ============================================================
+// K-Sweep batch
+// ============================================================
+
+export function useCreateKSweep() {
+  return useMutation({
+    mutationFn: (config: KSweepConfig) =>
+      fetchJson<BatchExperiment>('/api/experiments/k-sweep', {
+        method: 'POST',
+        body: JSON.stringify(config),
+      }),
+  });
+}
+
+export function useBatchStatus(batchId: string | null) {
+  return useQuery({
+    queryKey: ['batch', batchId] as const,
+    queryFn: () =>
+      fetchJson<BatchExperiment>(`/api/experiments/batch/${batchId}`),
+    enabled: !!batchId,
+    refetchInterval: 3000,
+  });
+}
+
+// ============================================================
+// Cross-experiment comparison
+// ============================================================
+
+export function useMultipleExperiments(ids: string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: queryKeys.experiment(id),
+      queryFn: () => fetchJson<ExperimentDetail>(`/api/experiments/${id}`),
+      staleTime: 30_000,
+    })),
   });
 }

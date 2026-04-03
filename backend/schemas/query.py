@@ -23,7 +23,7 @@ class DatabaseListResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Natural language query")
     db_id: str = Field(..., min_length=1, description="Database identifier")
-    dataset: str = Field(default="spider", description="spider | bird")
+    dataset: str = Field(default="hrdb", description="hrdb | bird")
 
 
 class ColumnInfo(BaseModel):

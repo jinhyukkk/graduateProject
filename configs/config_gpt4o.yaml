@@ -21,9 +21,11 @@ nli:
   model: "cross-encoder/nli-deberta-v3-base"
 
 evaluation:
-  datasets: ["spider", "bird"]
-  spider_dev_path: "data/raw/spider/dev.json"
+  datasets: ["hrdb", "bird"]
   bird_dev_path: "data/raw/bird/dev.json"
+  hrdb_dev_path: "data/raw/hrdb/dev.json"
+  hrdb_db_path: "data/raw/hrdb/hrdb.sqlite"
+  hrdb_metadata_path: "data/raw/hrdb/metadata.json"
 
 output:
   results_dir: "outputs/logs/"

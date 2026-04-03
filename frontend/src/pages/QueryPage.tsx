@@ -41,7 +41,7 @@ export default function QueryPage() {
         query: queryText,
         db_id: selectedDb,
         dataset:
-          dbData?.databases.find((d) => d.id === selectedDb)?.dataset || 'spider',
+          dbData?.databases.find((d) => d.id === selectedDb)?.dataset || 'hrdb',
       },
       {
         onSuccess: (data) => {

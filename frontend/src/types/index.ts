@@ -71,12 +71,40 @@ export interface QueryResult {
 // Experiment types
 // ============================================================
 
+export interface AblationFlags {
+  disable_schema_linker: boolean;
+  disable_execution_validator: boolean;
+  disable_semantic_verifier: boolean;
+  disable_correction_loop: boolean;
+}
+
+export type PipelineMode = 'zero-shot' | 'din-sql' | 'dail-sql' | 'chess' | 'sc-tsql' | 'custom';
+
 export interface ExperimentConfig {
-  dataset: 'spider' | 'bird';
+  dataset: 'hrdb' | 'bird';
   model: string;
   max_rounds: number;
   semantic_threshold: number;
   sample_count: number | null;
+  pipeline_mode?: PipelineMode;
+  ablation?: AblationFlags;
+}
+
+export interface KSweepConfig {
+  dataset: 'hrdb' | 'bird';
+  model: string;
+  semantic_threshold: number;
+  sample_count: number | null;
+  k_values: number[];
+}
+
+export interface BatchExperiment {
+  batch_id: string;
+  experiment_ids: string[];
+  k_values: number[];
+  status: string;
+  current_k?: number;
+  completed_count?: number;
 }
 
 export interface ExperimentMetrics {
