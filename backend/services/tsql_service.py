@@ -425,9 +425,18 @@ async def run_experiment(experiment_id: str):
             if db_id not in pipeline_cache:
                 try:
                     pipeline_cache[db_id] = SCTSQL(db_path, config, few_shot_examples, ablation=ablation_flags)
-                except Exception:
+                except Exception as init_err:
                     exp.current = i + 1
-                    continue
+                    await broadcast_ws(experiment_id, {
+                        "type": "log",
+                        "entry": {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "level": "error",
+                            "message": f"[PIPELINE INIT FAILED] {db_id}: {init_err}",
+                        },
+                    })
+                    # 초기화 실패 시 실험 자체를 중단 (모든 쿼리가 같은 이유로 실패하므로)
+                    raise RuntimeError(f"Pipeline initialization failed: {init_err}") from init_err
 
             pipeline = pipeline_cache[db_id]
 
