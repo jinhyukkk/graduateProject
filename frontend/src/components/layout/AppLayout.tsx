@@ -11,10 +11,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 const { Header, Sider, Content } = Layout;
 
 const menuItems = [
-  { key: '/', icon: <SearchOutlined />, label: 'Query' },
-  { key: '/experiment', icon: <ExperimentOutlined />, label: 'Experiment' },
-  { key: '/results', icon: <BarChartOutlined />, label: 'Results' },
-  { key: '/comparison', icon: <SwapOutlined />, label: 'Compare' },
+  { key: '/', icon: <SearchOutlined />, label: '자연어 조회' },
+  { key: '/experiment', icon: <ExperimentOutlined />, label: '실험 실행' },
+  { key: '/results', icon: <BarChartOutlined />, label: '결과 분석' },
+  { key: '/comparison', icon: <SwapOutlined />, label: '모델 비교' },
 ];
 
 interface AppLayoutProps {

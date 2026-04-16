@@ -2,27 +2,29 @@ import { Typography } from 'antd';
 import {
   DatabaseOutlined,
   CodeOutlined,
-  SyncOutlined,
+  PlayCircleOutlined,
+  BranchesOutlined,
   CheckCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
 
 interface PipelineVisualizerProps {
-  currentStep: number; // 0=idle, 1=schema, 2=sql, 3=correction, 4=result
+  currentStep: number; // 0=idle, 1=schema, 2=sql, 3=validate, 4=verify, 5=done
   isLoading: boolean;
 }
 
 const STEPS = [
-  { label: 'Schema Linking', sub: '관련 테이블 탐색', icon: DatabaseOutlined },
-  { label: 'SQL 생성', sub: 'Few-shot 프롬프팅', icon: CodeOutlined },
-  { label: '자기교정', sub: 'NLI + 실행 검증', icon: SyncOutlined },
-  { label: '완료', sub: '결과 반환', icon: CheckCircleOutlined },
+  { label: 'Schema Link',  sub: '관련 테이블 탐색',    icon: DatabaseOutlined },
+  { label: 'SQL 생성',     sub: 'Few-shot 프롬프팅',   icon: CodeOutlined },
+  { label: '실행 검증',    sub: 'SQL 실행 오류 확인',   icon: PlayCircleOutlined },
+  { label: '의미 검증',    sub: 'NLI 의도 일치 판정',   icon: BranchesOutlined },
+  { label: '완료',         sub: '결과 반환',            icon: CheckCircleOutlined },
 ];
 
 export default function PipelineVisualizer({ currentStep, isLoading }: PipelineVisualizerProps) {
   if (currentStep === 0 && !isLoading) return null;
 
-  // currentStep: 1=running step1, 2=running step2, 3=running step3, 4=all done
+  // currentStep: 1=running step1 ... 5=running step5, >5 or !isLoading = all done
   const activeIndex = isLoading ? currentStep - 1 : STEPS.length;
 
   return (
