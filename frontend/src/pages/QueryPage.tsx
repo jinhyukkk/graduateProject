@@ -5,7 +5,6 @@ import {
   Tag,
   Space,
   Alert,
-  Collapse,
   Button,
   Tooltip,
 } from 'antd';
@@ -17,6 +16,9 @@ import {
   CodeOutlined,
   DeleteOutlined,
   HistoryOutlined,
+  PlayCircleOutlined,
+  BranchesOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import { useDatabases, useRunQuery } from '../hooks/useApi';
 import QueryInput from '../components/query/QueryInput';
@@ -125,6 +127,144 @@ function LoadingBubble() {
   );
 }
 
+// ── 파이프라인 단계 결과 요약 ──────────────────────────────────
+function PipelineSummaryBar({ result }: { result: QueryResult }) {
+  const tableCount = result.schema_context?.tables?.length ?? 0;
+  const confidence = result.sql_confidence;
+  const validation = result.validation;
+  const verification = result.verification;
+  const correctionCount = result.correction_steps.length;
+
+  type StageStatus = 'success' | 'error' | 'warning';
+
+  interface Stage {
+    icon: React.ComponentType<{ style?: React.CSSProperties; spin?: boolean }>;
+    label: string;
+    detail: string;
+    status: StageStatus;
+  }
+
+  const stages: Stage[] = [
+    {
+      icon: DatabaseOutlined,
+      label: 'Schema Link',
+      detail: tableCount > 0 ? `${tableCount}개 테이블` : '완료',
+      status: 'success',
+    },
+    {
+      icon: CodeOutlined,
+      label: 'SQL 생성',
+      detail: confidence != null ? `신뢰도 ${(confidence * 100).toFixed(0)}%` : '완료',
+      status: 'success',
+    },
+    {
+      icon: PlayCircleOutlined,
+      label: '실행 검증',
+      detail: validation?.success ? '통과' : (validation?.error_type ?? '실패'),
+      status: validation?.success ? 'success' : 'error',
+    },
+    {
+      icon: BranchesOutlined,
+      label: '의미 검증',
+      detail: verification
+        ? `${(verification.similarity_score * 100).toFixed(0)}% 일치`
+        : '완료',
+      status: verification?.is_consistent ? 'success' : 'warning',
+    },
+    ...(correctionCount > 0
+      ? [
+          {
+            icon: SyncOutlined,
+            label: '자기교정',
+            detail: `${correctionCount}회 교정`,
+            status: 'warning' as StageStatus,
+          },
+        ]
+      : []),
+  ];
+
+  const statusColor: Record<StageStatus, string> = {
+    success: '#52c41a',
+    error: '#ff4d4f',
+    warning: '#fa8c16',
+  };
+  const statusBg: Record<StageStatus, string> = {
+    success: '#f6ffed',
+    error: '#fff2f0',
+    warning: '#fff7e6',
+  };
+
+  return (
+    <div
+      style={{
+        background: '#fafafa',
+        borderRadius: 8,
+        padding: '8px 12px',
+        border: '1px solid #f0f0f0',
+        marginBottom: 10,
+      }}
+    >
+      <Typography.Text
+        type="secondary"
+        style={{
+          fontSize: 10,
+          display: 'block',
+          marginBottom: 8,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        파이프라인 실행 결과
+      </Typography.Text>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        {stages.map((stage, idx) => {
+          const color = statusColor[stage.status];
+          const bg = statusBg[stage.status];
+          const Icon = stage.icon;
+          return (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div
+                style={{
+                  background: bg,
+                  border: `1px solid ${color}44`,
+                  borderRadius: 6,
+                  padding: '3px 8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                }}
+              >
+                <Icon style={{ fontSize: 11, color }} />
+                <div>
+                  <Typography.Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: '#262626',
+                      display: 'block',
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {stage.label}
+                  </Typography.Text>
+                  <Typography.Text
+                    style={{ fontSize: 10, color: '#8c8c8c', display: 'block', lineHeight: 1.3 }}
+                  >
+                    {stage.detail}
+                  </Typography.Text>
+                </div>
+              </div>
+              {idx < stages.length - 1 && (
+                <span style={{ color: '#bfbfbf', fontSize: 12 }}>›</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── 어시스턴트 응답 카드 ───────────────────────────────────────
 function AssistantBubble({ entry }: { entry: ChatEntry }) {
   if (entry.isLoading) return <LoadingBubble />;
@@ -152,48 +292,6 @@ function AssistantBubble({ entry }: { entry: ChatEntry }) {
 
   if (!entry.result) return null;
   const r = entry.result;
-
-  const collapseItems = [
-    {
-      key: 'sql',
-      label: (
-        <Typography.Text style={{ fontSize: 12, color: '#595959' }}>
-          <CodeOutlined style={{ marginRight: 5 }} />
-          생성된 SQL {r.was_corrected ? '· 교정 적용됨' : ''}
-        </Typography.Text>
-      ),
-      children: (
-        <Space direction="vertical" style={{ width: '100%' }} size="small">
-          <SqlDisplay sql={r.original_sql} label="생성된 SQL" />
-          {r.was_corrected && <SqlDisplay sql={r.final_sql} label="최종 SQL" corrected />}
-          <SchemaContextDisplay schema={r.schema_context} />
-        </Space>
-      ),
-    },
-    ...(r.correction_steps.length > 0
-      ? [
-          {
-            key: 'corrections',
-            label: (
-              <Typography.Text style={{ fontSize: 12, color: '#595959' }}>
-                <HistoryOutlined style={{ marginRight: 5 }} />
-                교정 이력
-                <Tag style={{ marginLeft: 6, fontSize: 11 }}>
-                  {r.correction_steps.length}회
-                </Tag>
-              </Typography.Text>
-            ),
-            children: (
-              <CorrectionStepper
-                steps={r.correction_steps}
-                activeStep={r.correction_steps[0]?.round ?? 1}
-                onStepClick={() => {}}
-              />
-            ),
-          },
-        ]
-      : []),
-  ];
 
   return (
     <div
@@ -247,6 +345,53 @@ function AssistantBubble({ entry }: { entry: ChatEntry }) {
           </div>
         )}
 
+        {/* 파이프라인 실행 결과 요약 */}
+        <PipelineSummaryBar result={r} />
+
+        {/* 생성된 SQL (항상 표시) */}
+        <div style={{ marginBottom: 10 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="small">
+            <SqlDisplay sql={r.original_sql} label="생성된 SQL" />
+            {r.was_corrected && (
+              <SqlDisplay sql={r.final_sql} label="최종 SQL (교정됨)" corrected />
+            )}
+            <SchemaContextDisplay schema={r.schema_context} />
+          </Space>
+        </div>
+
+        {/* 교정 이력 (항상 표시, 교정이 있는 경우) */}
+        {r.correction_steps.length > 0 && (
+          <div
+            style={{
+              background: '#fff',
+              border: '1px solid #f0f0f0',
+              borderRadius: 8,
+              padding: '10px 14px',
+              marginBottom: 10,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 10,
+              }}
+            >
+              <HistoryOutlined style={{ fontSize: 12, color: '#8c8c8c' }} />
+              <Typography.Text style={{ fontSize: 12, color: '#595959' }}>
+                교정 이력
+              </Typography.Text>
+              <Tag style={{ fontSize: 11, margin: 0 }}>{r.correction_steps.length}회</Tag>
+            </div>
+            <CorrectionStepper
+              steps={r.correction_steps}
+              activeStep={r.correction_steps[0]?.round ?? 1}
+              onStepClick={() => {}}
+            />
+          </div>
+        )}
+
         {/* 결과 테이블 */}
         {r.result.columns.length > 0 && (
           <div style={{ marginBottom: 8 }}>
@@ -282,16 +427,6 @@ function AssistantBubble({ entry }: { entry: ChatEntry }) {
             </Tag>
           )}
         </Space>
-
-        {/* SQL / 교정 이력 (접을 수 있는 패널) */}
-        {collapseItems.length > 0 && (
-          <Collapse
-            ghost
-            size="small"
-            items={collapseItems}
-            style={{ marginTop: 4 }}
-          />
-        )}
       </div>
     </div>
   );
