@@ -52,26 +52,34 @@ SQL: {sql}"""
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=0.0,
-            max_tokens=256,
+            max_completion_tokens=256,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content.strip()
 
     def _compute_nli_score(self, original_query: str, back_translation: str) -> float:
         """
-        Section 4.4.2, Step 2: NLI 모델로 entailment score를 계산한다.
-        sim(q, q̂) = NLI entailment score ∈ [0, 1]
+        Section 4.4.2, Step 2: NLI 모델로 양방향 entailment score를 계산한다.
+        sim(q, q̂) = min(P(q → q̂), P(q̂ → q)) ∈ [0, 1]
+
+        NLI는 비대칭 관계이므로, 의미 동등성을 근사하기 위해 두 방향의
+        entailment 확률 중 낮은 값을 취한다(보수적 집계). 단방향만 사용하면
+        "원 질문이 역번역보다 더 구체적/일반적"인 경우 한쪽만 높게 나와
+        오탐이 증가한다.
 
         cross-encoder/nli-deberta-v3-base 출력: [contradiction, entailment, neutral]
-        entailment 확률을 유사도 점수로 사용한다.
         """
         scores = self.nli_model.predict(
-            [(original_query, back_translation)],
+            [
+                (original_query, back_translation),  # q → q̂
+                (back_translation, original_query),  # q̂ → q
+            ],
             apply_softmax=True,
         )
-        # scores shape: (1, 3) → [contradiction, entailment, neutral]
-        entailment_score = float(scores[0][1])
-        return entailment_score
+        # scores shape: (2, 3) → 각 행 [contradiction, entailment, neutral]
+        forward = float(scores[0][1])
+        backward = float(scores[1][1])
+        return min(forward, backward)
 
     def _diagnose_mismatch(self, original_query: str, sql: str, back_translation: str) -> str:
         """
@@ -99,7 +107,7 @@ Analyze the mismatch between the original question and the SQL query.
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=0.0,
-            max_tokens=512,
+            max_completion_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content.strip()

@@ -28,10 +28,12 @@ async def get_databases():
 async def execute_query(req: QueryRequest):
     """Execute SC-TSQL pipeline for a single natural-language query."""
     try:
+        history = [t.model_dump() for t in req.conversation_history]
         result = run_query(
             query=req.query,
             db_id=req.db_id,
             dataset=req.dataset,
+            conversation_history=history,
         )
         return result
     except FileNotFoundError as e:

@@ -1,6 +1,6 @@
 """
 Corrector (Section 4.4.3)
-오류 정보 기반 SQL 교정.
+오류 정보 기반 SQL 교정. RQ2: 오류 유형별 전용 교정 지시문 라우팅.
 """
 
 import os
@@ -9,18 +9,97 @@ from src.execution_validator import ValidationResult
 from src.semantic_verifier import VerificationResult
 
 
+# RQ2: 오류 유형별 전용 교정 지시문.
+# E1~E8은 ExecutionValidator의 분류 체계와 1:1 대응한다.
+# SEMANTIC_MISMATCH는 실행은 성공했으나 NLI 의미 검증이 불일치를 진단한 경우.
+TYPED_CORRECTION_GUIDANCE = {
+    "E1_SYNTAX": (
+        "이 SQL은 문법 오류로 실행되지 못했습니다. "
+        "키워드 철자, 괄호·콤마·따옴표 균형, FROM/WHERE/GROUP BY/ORDER BY 절 순서를 점검하세요. "
+        "스키마나 의미는 그대로 유지하고 문법 토큰만 최소 수정하세요."
+    ),
+    "E2_NO_SUCH_TABLE": (
+        "참조한 테이블이 스키마에 존재하지 않습니다. "
+        "제공된 스키마에서 가장 의미가 가까운 테이블명을 찾아 교체하세요. "
+        "대소문자, 단·복수, 약어 차이를 특히 주의하세요. 스키마에 없는 테이블을 새로 만들지 마세요."
+    ),
+    "E3_NO_SUCH_COLUMN": (
+        "참조한 컬럼이 해당 테이블에 존재하지 않습니다. "
+        "스키마의 PRAGMA table_info를 떠올려, 각 컬럼이 어느 테이블에 속하는지 다시 확인하고 "
+        "필요하다면 올바른 테이블을 JOIN하거나, 컬럼명을 스키마에 존재하는 것으로 교정하세요. "
+        "유사 의미 컬럼명(예: name vs full_name)을 우선 후보로 검토하세요."
+    ),
+    "E4_AMBIGUOUS_COLUMN": (
+        "여러 테이블에 같은 이름의 컬럼이 있어 모호합니다. "
+        "모든 컬럼 참조를 `테이블별칭.컬럼` 형태로 명시적으로 한정하고, "
+        "FROM/JOIN 절의 모든 테이블에 짧은 별칭(alias)을 부여하세요."
+    ),
+    "E5_TYPE_MISMATCH": (
+        "비교·연산하는 두 값의 자료형이 호환되지 않습니다. "
+        "리터럴의 따옴표 유무를 확인하고, 필요하면 CAST(... AS INTEGER/REAL/TEXT)로 명시 변환하세요. "
+        "날짜는 strftime/date 함수로, 숫자 비교에는 따옴표 없이 사용하세요."
+    ),
+    "E6_AGGREGATE_ERROR": (
+        "집계 함수 사용이 잘못되었습니다. "
+        "SELECT 절에 집계 함수와 일반 컬럼이 함께 등장한다면 GROUP BY를 추가하고, "
+        "집계 결과로 필터링하려면 WHERE 대신 HAVING을 사용하세요. "
+        "GROUP BY 키에는 집계되지 않은 모든 일반 컬럼이 포함되어야 합니다."
+    ),
+    "E7_EMPTY_RESULT": (
+        "SQL은 정상 실행되었으나 결과가 0행입니다. 논리 오류일 가능성이 높습니다. "
+        "다음을 차례로 점검하세요: "
+        "(1) WHERE 조건이 너무 엄격하지 않은가 (대소문자·공백·LIKE 와일드카드), "
+        "(2) JOIN 조건이 잘못되어 매칭이 사라지지 않았는가 (INNER vs LEFT), "
+        "(3) NULL 처리(IS NULL / COALESCE)가 필요한가, "
+        "(4) 비교 값이 실제 데이터와 일치하는 형태(대소문자·약어)인가. "
+        "조건을 한 단계 완화하거나 JOIN 종류를 바꿔 결과가 나오는 형태로 교정하세요."
+    ),
+    "E8_EXCESSIVE_RESULT": (
+        "결과 행 수가 비정상적으로 많습니다(>1000행). 질의 의도에 비해 필터/조인이 부족합니다. "
+        "다음을 점검하세요: "
+        "(1) JOIN 조건이 누락되어 카테시안 곱이 발생하지 않았는가, "
+        "(2) 자연어 질의가 암시하는 WHERE 조건(특정 연도·범주·상위 N)이 빠지지 않았는가, "
+        "(3) DISTINCT나 GROUP BY가 필요하지 않은가, "
+        "(4) LIMIT 절이 필요한 'top-N' 질의가 아닌가. "
+        "누락된 제약을 추가해 의도한 행 수에 맞도록 교정하세요."
+    ),
+    "SEMANTIC_MISMATCH": (
+        "SQL은 정상 실행되었으나, 결과를 자연어로 역번역해 보면 원 질문의 의도와 어긋납니다. "
+        "원 질문을 한 줄씩 다시 읽고, 다음을 점검하세요: "
+        "(1) SELECT 컬럼이 질문이 묻는 대상과 정확히 일치하는가, "
+        "(2) 집계 단위(개수·평균·합계·최대/최소)가 질문과 일치하는가, "
+        "(3) 필터 조건이 질문의 모든 한정어를 포함하는가, "
+        "(4) 정렬·상위 N 요건이 반영되었는가. "
+        "의미 진단(`mismatch_diagnosis`)이 있다면 그 지적을 우선적으로 반영하세요."
+    ),
+}
+
+# 분류되지 않은 오류에 대한 일반 지시문 (안전망).
+GENERIC_CORRECTION_GUIDANCE = (
+    "오류 메시지와 의미 진단을 종합해 최소한의 변경으로 SQL을 교정하세요. "
+    "스키마와 원 질문의 의도를 우선 따르고, 불필요한 구조 변경은 피하세요."
+)
+
+
 class Corrector:
     """
     Section 4.4.3: 구체적 오류 정보를 포함한 교정 프롬프트로 SQL을 교정한다.
 
     교정 프롬프트 구조 (Section 4.4.3):
       원래 질의 + 생성된 SQL + 실행 결과 + 감지된 오류 + 의미 일관성 진단
+      + (RQ2) 오류 유형별 전용 교정 지시문
+
+    Args:
+        config: configs/config.yaml에서 로드된 설정.
+        use_typed_prompt: True면 RQ2의 타입별 지시문을, False면 단일 공용 지시문을 사용.
+            어블레이션(typed vs generic) 비교 시 False로 설정.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, use_typed_prompt: bool = True):
         self.config = config
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.llm_model = config["llm"]["model"]
+        self.use_typed_prompt = use_typed_prompt
 
     def correct(
         self,
@@ -46,7 +125,11 @@ class Corrector:
         semantic_info = self._format_semantic_info(verification_result)
         execution_info = self._format_execution_result(validation_result)
 
-        # Section 4.4.3: Corrector 프롬프트 구조
+        # RQ2: 진단된 오류 유형에 맞는 전용 교정 지시문을 선택한다.
+        routed_error_type = self._route_error_type(validation_result, verification_result)
+        guidance = self._select_guidance(routed_error_type)
+
+        # Section 4.4.3 + RQ2: 오류 유형별 지시문이 포함된 Corrector 프롬프트
         prompt = f"""You are an expert SQL debugger. Fix the following SQL query based on the error information provided.
 
 원래 질의: {query}
@@ -55,15 +138,17 @@ class Corrector:
 감지된 오류: {error_info}
 의미 일관성 진단: {semantic_info}
 
-위의 오류를 수정하여 올바른 SQL을 생성하세요.
-수정한 부분과 이유를 간략히 설명하세요.
+[교정 지시 — 오류 유형: {routed_error_type}]
+{guidance}
+
+위의 지시에 따라 SQL을 교정하세요. 수정한 부분과 이유를 간략히 설명하세요.
 
 Return the corrected SQL query wrapped in ```sql``` code blocks, followed by a brief explanation."""
 
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=self.config["llm"]["temperature"],
-            max_tokens=self.config["llm"]["max_tokens"],
+            max_completion_tokens=self.config["llm"]["max_tokens"],
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -89,6 +174,34 @@ Return the corrected SQL query wrapped in ```sql``` code blocks, followed by a b
             corrected_sql = "\n".join(sql_lines).strip() if sql_lines else result_text
 
         return corrected_sql
+
+    def _route_error_type(
+        self,
+        validation_result: ValidationResult,
+        verification_result: VerificationResult | None,
+    ) -> str:
+        """
+        RQ2: 교정 라우팅 규칙.
+
+        실행 오류(E1~E6)가 있으면 최우선으로 해당 타입을 사용한다.
+        실행은 성공했지만 빈/과대 결과면 E7/E8.
+        실행과 결과가 모두 정상이지만 의미 검증이 불일치면 SEMANTIC_MISMATCH.
+        그 외(분류 실패)는 UNKNOWN으로 폴백한다.
+        """
+        if validation_result.error_type is not None:
+            return validation_result.error_type
+        if verification_result is not None and not verification_result.is_consistent:
+            return "SEMANTIC_MISMATCH"
+        return "UNKNOWN"
+
+    def _select_guidance(self, error_type: str) -> str:
+        """RQ2: 오류 유형에 맞는 교정 지시문을 반환한다.
+
+        어블레이션 모드(use_typed_prompt=False)에서는 항상 공용 지시문을 반환한다.
+        """
+        if not self.use_typed_prompt:
+            return GENERIC_CORRECTION_GUIDANCE
+        return TYPED_CORRECTION_GUIDANCE.get(error_type, GENERIC_CORRECTION_GUIDANCE)
 
     def _format_error_info(self, validation_result: ValidationResult) -> str:
         """오류 정보를 포맷한다."""

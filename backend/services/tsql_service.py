@@ -27,6 +27,7 @@ try:
     from src.sc_tsql import SCTSQL, SCTSQLResult
     from src.execution_validator import ExecutionValidator, ValidationResult
     from src.semantic_verifier import VerificationResult
+    from src.langgraph_orchestrator import LangGraphSCTSQL
     SRC_AVAILABLE = True
 except ImportError as e:
     # If src/ modules cannot be imported (e.g. missing deps), mark as unavailable.
@@ -186,10 +187,22 @@ def get_schema_info(db_path: str) -> dict:
 # Single query execution
 # ────────────────────────────────────────────────────────────
 
-def run_query(query: str, db_id: str, dataset: str = "hrdb") -> dict:
+def run_query(
+    query: str,
+    db_id: str,
+    dataset: str = "hrdb",
+    conversation_history: list[dict] | None = None,
+) -> dict:
     """
     Execute the SC-TSQL pipeline for a single natural language query.
     Returns a dict matching the QueryResponse schema shape.
+
+    Args:
+        query: 자연어 질의
+        db_id: 데이터베이스 식별자
+        dataset: "hrdb" | "bird"
+        conversation_history: 이전 대화 이력 (Phase 3 멀티턴).
+            각 항목: {"question": str, "sql": str, "explanation": str}
     """
     db_path = resolve_db_path(dataset, db_id)
 
@@ -200,8 +213,15 @@ def run_query(query: str, db_id: str, dataset: str = "hrdb") -> dict:
         )
 
     config = load_config()
-    pipeline = SCTSQL(db_path, config)
-    result: SCTSQLResult = pipeline.run(query)
+    # Phase 3: config.use_langgraph=true 시 LangGraph 오케스트레이터 사용
+    if config.get("use_langgraph", False):
+        pipeline = LangGraphSCTSQL(db_path, config)
+    else:
+        pipeline = SCTSQL(db_path, config)
+    result: SCTSQLResult = pipeline.run(
+        query,
+        conversation_history=conversation_history or [],
+    )
 
     # Build response
     query_id = f"q_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{id(result) % 0xFFFFFF:06x}"
@@ -256,6 +276,21 @@ def run_query(query: str, db_id: str, dataset: str = "hrdb") -> dict:
             "mismatch_diagnosis": result.final_verification.mismatch_diagnosis,
         }
 
+    # Guardrails info (Phase 3)
+    guardrails_info = {
+        "rows_truncated": False,
+        "original_row_count": 0,
+        "low_confidence_warning": False,
+        "warning_message": "",
+    }
+    if result.guardrails is not None:
+        guardrails_info = {
+            "rows_truncated": result.guardrails.rows_truncated,
+            "original_row_count": result.guardrails.original_row_count,
+            "low_confidence_warning": result.guardrails.low_confidence_warning,
+            "warning_message": result.guardrails.warning_message,
+        }
+
     return {
         "id": query_id,
         "query": result.query,
@@ -273,6 +308,8 @@ def run_query(query: str, db_id: str, dataset: str = "hrdb") -> dict:
         "latency": round(result.latency, 2),
         "validation": validation,
         "verification": verification,
+        "sql_confidence": round(result.sql_confidence, 4),
+        "guardrails": guardrails_info,
     }
 
 

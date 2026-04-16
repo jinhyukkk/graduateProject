@@ -1,0 +1,51 @@
+services:
+
+  # ── 백엔드 (FastAPI + SC-TSQL 파이프라인) ────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: sc-tsql-backend:latest
+    container_name: sc-tsql-backend
+    restart: unless-stopped
+    env_file:
+      - .env                        # OPENAI_API_KEY 등 민감 정보
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data            # BIRD/HRDB 데이터셋 (읽기 전용 가능)
+      - ./outputs:/app/outputs      # 실험 결과 영속화
+      - ./configs:/app/configs      # 설정 파일 핫 스왑
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s             # NLI 모델 로딩 대기
+    networks:
+      - sc-tsql-net
+
+  # ── 프런트엔드 (React + nginx) ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    image: sc-tsql-frontend:latest
+    container_name: sc-tsql-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - sc-tsql-net
+
+networks:
+  sc-tsql-net:
+    driver: bridge

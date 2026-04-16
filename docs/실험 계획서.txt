@@ -1,0 +1,81 @@
+실험 계획서
+논문: 오류 유형 인식 기반 자기교정 에이전트를 활용한 Text-to-SQL 정확도 향상 연구
+
+1. 실험 목표
+BIRD dev set 기준으로 5조건 Ablation 실험을 수행하여, 오류 유형 분류 기반 적응적 자기교정 파이프라인의 효과를 EX와 ECR로 정량화한다.
+
+2. 실험 환경
+항목
+내용
+모델
+GPT-4o (OpenAI API)
+프레임워크
+LangGraph
+데이터
+BIRD dev set, 600개 stratified sampling
+SQL 방언
+SQLite
+평가 지표
+EX (Execution Accuracy), ECR (Error Correction Rate)
+
+3. 5조건 Ablation 설계
+조건
+이름
+설명
+C1
+No Correction
+교정 없음. Schema RAG + NL2SQL만 적용. 베이스라인.
+C2
+Naive Retry
+오류 발생 시 동일 프롬프트로 단순 재시도.
+C3
+Fixed CoT
+유형 분류 없이 모든 오류에 CoT 교정 일괄 적용.
+C4
+Fixed RAG
+유형 분류 없이 모든 오류에 RAG 교정 일괄 적용.
+C5
+Adaptive (제안)
+Error Classifier로 유형 분류 후 Schema/Join/Aggregation → CoT, Condition/Logic → RAG 분기 적용.
+C3, C4는 "분류 없는 고정 순서 교정" 역할로, 분류 자체의 기여(RQ2)를 분리하기 위한 비교 조건이다.
+
+4. 평가 방법
+EX는 전체 600개 기준 실행 결과 일치율로 계산한다. ECR은 C1에서 오류로 분류된 샘플만을 대상으로, 각 조건별 교정 성공률을 측정한다. 두 지표 모두 오류 유형(Schema / Join / Aggregation / Condition / Logic) 별로 분해 보고한다.
+
+5. 일정
+주차
+기간
+작업
+1주
+3/25 – 3/31
+환경 구성, BIRD dev set 로딩, Schema RAG 모듈 구현
+2주
+4/1 – 4/7
+NL2SQL + Validator + Error Classifier 구현
+3주
+4/8 – 4/14
+CoT 교정 / RAG 교정 모듈 구현, C1~C5 파이프라인 완성
+4주
+4/15 – 4/21
+5조건 실험 실행, EX·ECR 결과 수집
+5주
+4/22 – 4/28
+결과 분석, 오류 유형별 분해, 서론 X%/Y% 반영
+6주
+4/29 – 5/5
+4장(실험) 작성, 전체 논문 통합 및 교정
+7주
+5/6 – 5/8
+최종 검토 및 제출
+버퍼가 거의 없는 일정이라 4주차까지 실험이 완료되지 않으면 5주차 이후가 연쇄 지연됩니다. 3주 안에 파이프라인 완성이 핵심 리스크예요.
+
+6. 리스크 및 대응
+리스크
+대응
+GPT-4o API 비용 초과
+사전에 600개 × 5조건 예상 토큰 계산, 예산 상한 설정
+Error Classifier 분류 정확도 낮음
+소규모 샘플(50개)로 사전 검증 후 본 실험 진행
+일정 지연
+4/21까지 실험 미완 시 sampling 수를 400개로 축소 검토
+

@@ -1,4 +1,5 @@
-import { Table, Card, Empty } from 'antd';
+import { Table, Card, Empty, Typography } from 'antd';
+import { TableOutlined } from '@ant-design/icons';
 
 interface ResultTableProps {
   columns: string[];
@@ -13,10 +14,19 @@ export default function ResultTable({
   rows,
   maxRows = 100,
   isLoading = false,
-  title = 'Query Result',
+  title = '쿼리 결과',
 }: ResultTableProps) {
   if (!columns.length && !isLoading) {
-    return <Empty description="No results" />;
+    return (
+      <Empty
+        description={
+          <Typography.Text type="secondary">
+            조건에 맞는 결과가 없습니다
+          </Typography.Text>
+        }
+        style={{ padding: 48 }}
+      />
+    );
   }
 
   const tableColumns = columns.map((col) => ({
@@ -25,7 +35,11 @@ export default function ResultTable({
     key: col,
     ellipsis: true,
     render: (val: unknown) =>
-      val === null ? <span style={{ color: '#ccc' }}>NULL</span> : String(val),
+      val === null ? (
+        <span style={{ color: '#bfbfbf', fontStyle: 'italic', fontSize: 12 }}>NULL</span>
+      ) : (
+        String(val)
+      ),
   }));
 
   const dataSource = rows.slice(0, maxRows).map((row, idx) => ({
@@ -36,8 +50,17 @@ export default function ResultTable({
   return (
     <Card
       size="small"
-      title={`${title} (${rows.length} rows)`}
-      style={{ marginBottom: 12 }}
+      title={
+        <span>
+          <TableOutlined style={{ marginRight: 6, color: '#1677ff' }} />
+          {title}
+        </span>
+      }
+      extra={
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {rows.length.toLocaleString()}행
+        </Typography.Text>
+      }
     >
       <Table
         columns={tableColumns}
@@ -45,8 +68,13 @@ export default function ResultTable({
         rowKey="_key"
         size="small"
         loading={isLoading}
-        pagination={rows.length > 10 ? { pageSize: 10, size: 'small' } : false}
+        pagination={
+          rows.length > 10
+            ? { pageSize: 10, size: 'small', showSizeChanger: false }
+            : false
+        }
         scroll={{ x: 'max-content' }}
+        style={{ fontSize: 13 }}
       />
     </Card>
   );

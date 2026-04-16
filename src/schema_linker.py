@@ -235,7 +235,7 @@ Return ONLY the JSON, no other text."""
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=self.config["llm"]["temperature"],
-            max_tokens=self.config["llm"]["max_tokens"],
+            max_completion_tokens=self.config["llm"]["max_tokens"],
             messages=[{"role": "user", "content": prompt}],
         )
 

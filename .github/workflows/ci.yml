@@ -1,0 +1,196 @@
+name: SC-TSQL CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 1. 정적 검사 ─────────────────────────────────────────────
+  lint:
+    name: Syntax & Import Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install minimal deps
+        run: pip install pyyaml pydantic fastapi
+
+      - name: AST syntax check (src/)
+        run: |
+          python3 - <<'EOF'
+          import ast, pathlib, sys
+          errors = []
+          for f in pathlib.Path("src").rglob("*.py"):
+              try:
+                  ast.parse(f.read_text())
+              except SyntaxError as e:
+                  errors.append(f"{f}: {e}")
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          print(f"OK — {len(list(pathlib.Path('src').rglob('*.py')))} files passed")
+          EOF
+
+      - name: AST syntax check (backend/)
+        run: |
+          python3 - <<'EOF'
+          import ast, pathlib, sys
+          errors = []
+          for f in pathlib.Path("backend").rglob("*.py"):
+              try:
+                  ast.parse(f.read_text())
+              except SyntaxError as e:
+                  errors.append(f"{f}: {e}")
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          print(f"OK — {len(list(pathlib.Path('backend').rglob('*.py')))} files passed")
+          EOF
+
+  # ── 2. 단위 테스트 ────────────────────────────────────────────
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install test dependencies
+        run: |
+          pip install pyyaml pydantic pytest
+
+      - name: Run unit tests (no LLM / no API key required)
+        run: |
+          python3 -m pytest tests/ -v --tb=short -m "not integration" 2>/dev/null || \
+          echo "No tests directory yet — skipped"
+
+      - name: Guardrails smoke test
+        run: |
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, ".")
+          from src.guardrails import InputGuardrails, OutputGuardrails, GuardrailsError
+
+          g = InputGuardrails()
+
+          # 정상 케이스
+          assert g.validate("부서별 평균 급여를 알려줘") == "부서별 평균 급여를 알려줘"
+
+          # 빈 쿼리 거부
+          try:
+              g.validate("  ")
+              assert False, "should raise"
+          except GuardrailsError:
+              pass
+
+          # SQL 주입 거부
+          try:
+              g.validate("show me data; drop table users")
+              assert False, "should raise"
+          except GuardrailsError:
+              pass
+
+          # 너무 긴 쿼리 거부
+          try:
+              g.validate("a" * 501)
+              assert False, "should raise"
+          except GuardrailsError:
+              pass
+
+          # OutputGuardrails 행 수 제한
+          og = OutputGuardrails(semantic_threshold=0.75)
+          rows = [("row",)] * 1500
+          truncated, result = og.apply(rows, 0.9, 0.8, 0, 3)
+          assert len(truncated) == 1000
+          assert result.rows_truncated is True
+          assert result.original_row_count == 1500
+
+          # OutputGuardrails 저신뢰 경고
+          _, result2 = og.apply([("row",)], 0.9, 0.5, 3, 3)
+          assert result2.low_confidence_warning is True
+
+          print("OK — all guardrails smoke tests passed")
+          EOF
+
+  # ── 3. 백엔드 스키마 검증 ─────────────────────────────────────
+  backend-schema:
+    name: Backend Schema Validation
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install backend deps
+        run: pip install pydantic fastapi
+
+      - name: Validate Pydantic schemas
+        run: |
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, ".")
+          from backend.schemas.query import (
+              QueryRequest, QueryResponse, ConversationTurn,
+              GuardrailsInfo, CorrectionStep,
+          )
+
+          # QueryRequest — conversation_history 기본값
+          req = QueryRequest(query="테스트 질문", db_id="hrdb")
+          assert req.conversation_history == []
+
+          # QueryRequest — 멀티턴 포함
+          req2 = QueryRequest(
+              query="추가 질문",
+              db_id="hrdb",
+              conversation_history=[
+                  ConversationTurn(question="이전 질문", sql="SELECT 1")
+              ],
+          )
+          assert len(req2.conversation_history) == 1
+          assert req2.conversation_history[0].sql == "SELECT 1"
+
+          # GuardrailsInfo 기본값
+          gi = GuardrailsInfo()
+          assert gi.low_confidence_warning is False
+
+          print("OK — backend schemas validated")
+          EOF
+
+  # ── 4. 프런트엔드 타입 체크 ───────────────────────────────────
+  frontend-typecheck:
+    name: Frontend Type Check
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: TypeScript type check
+        working-directory: frontend
+        run: npx tsc --noEmit

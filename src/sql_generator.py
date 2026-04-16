@@ -1,8 +1,10 @@
 """
 SQL Generator (Section 4.3)
 Few-shot 예시 선택 + GPT-4o SQL 생성.
+Phase 2: Logprob 기반 Confidence Scoring + Cross-encoder Reranking 추가.
 """
 
+import math
 import os
 import numpy as np
 from openai import OpenAI
@@ -14,14 +16,25 @@ class SQLGenerator:
 
     DAIL-SQL 방식 참고: 구조적 유사도(0.5) + 의미적 유사도(0.5) 가중합으로
     가장 유사한 예시 K개를 선택하여 few-shot 프롬프트를 구성한다.
+
+    Phase 2 추가:
+    - Cross-encoder Reranking: 초기 embedding 후보 2K개를 cross-encoder로 재정렬
+    - Confidence Scoring: logprob 기반 생성 신뢰도 계산
     """
 
-    def __init__(self, config: dict, few_shot_examples: list[dict] | None = None):
+    def __init__(
+        self,
+        config: dict,
+        few_shot_examples: list[dict] | None = None,
+        reranker=None,
+    ):
         """
         Args:
             config: configs/config.yaml에서 로드된 설정
             few_shot_examples: few-shot 후보 리스트. 각 항목은
                 {"query": str, "sql": str, "schema": str, "db_id": str} 형태.
+            reranker: (Phase 2) CrossEncoder 인스턴스. 제공 시 few-shot 재정렬에 사용.
+                      None이면 embedding+structural 점수만 사용.
         """
         self.config = config
         self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -29,6 +42,7 @@ class SQLGenerator:
         self.embedding_model = config["embedding"]["model"]
         self.few_shot_k = config["sql_generator"]["few_shot_k"]
         self.few_shot_examples = few_shot_examples or []
+        self.reranker = reranker  # Phase 2: CrossEncoder for reranking
         self._example_embeddings = None
 
     def _get_embedding(self, texts: list[str]) -> np.ndarray:
@@ -55,7 +69,7 @@ class SQLGenerator:
     def _structural_similarity(self, query_schema: str, example_schema: str) -> float:
         """
         Section 4.3: 구조적 유사도 계산.
-        # 미명시: 스키마 토큰 Jaccard 유사도 적용 (DAIL-SQL 기본 설정)
+        스키마 토큰 Jaccard 유사도 (DAIL-SQL 기본 설정)
         """
         query_tokens = set(query_schema.lower().split())
         example_tokens = set(example_schema.lower().split())
@@ -67,8 +81,13 @@ class SQLGenerator:
 
     def _select_few_shot(self, query: str, schema_text: str) -> list[dict]:
         """
-        Section 4.3: 구조적 유사도(0.5) + 의미적 유사도(0.5) 가중합으로
-        가장 유사한 K개 예시를 선택한다. (DAIL-SQL 방식 참고)
+        Section 4.3 + Phase 2: 구조적 유사도(0.5) + 의미적 유사도(0.5) 가중합으로
+        상위 후보를 추출하고, reranker가 있으면 cross-encoder로 재정렬한다.
+
+        Phase 2 Reranking:
+          1단계: embedding + Jaccard 가중합으로 2K개 후보 추출 (K = few_shot_k)
+          2단계: cross-encoder(query, example_query)의 entailment score로 재정렬
+                 → 상위 K개 최종 선택
         """
         if not self.few_shot_examples:
             return []
@@ -88,26 +107,60 @@ class SQLGenerator:
         # 가중합: 0.5 * structural + 0.5 * semantic
         combined_scores = 0.5 * structural_scores + 0.5 * semantic_scores
 
-        # 상위 K개 선택
+        # Phase 2 Reranking: cross-encoder가 있으면 2K 후보를 먼저 뽑은 뒤 재정렬
+        if self.reranker is not None:
+            pre_k = min(self.few_shot_k * 2, len(self.few_shot_examples))
+            pre_indices = np.argsort(combined_scores)[::-1][:pre_k]
+            pre_candidates = [self.few_shot_examples[i] for i in pre_indices]
+
+            # cross-encoder: (query, example_query) 쌍의 entailment score
+            # cross-encoder/nli-deberta-v3-base: [contradiction, entailment, neutral]
+            pairs = [(query, ex["query"]) for ex in pre_candidates]
+            try:
+                ce_scores = self.reranker.predict(pairs, apply_softmax=True)
+                # entailment score (index 1) 사용
+                entailment_scores = [float(s[1]) for s in ce_scores]
+                # entailment score 기준으로 재정렬
+                ranked = sorted(
+                    zip(pre_candidates, entailment_scores),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )
+                return [c for c, _ in ranked[:self.few_shot_k]]
+            except Exception:
+                # reranker 실패 시 fallback: 기존 combined_scores 사용
+                return [pre_candidates[i] for i in range(self.few_shot_k)]
+
+        # Reranker 없음: 기존 방식
         top_indices = np.argsort(combined_scores)[::-1][:self.few_shot_k]
         return [self.few_shot_examples[i] for i in top_indices]
 
-    def generate(self, query: str, schema_context: dict) -> str:
+    def generate(
+        self,
+        query: str,
+        schema_context: dict,
+        conversation_history: list[dict] | None = None,
+    ) -> dict:
         """
-        Section 4.3: SQL을 생성한다.
+        Section 4.3 + Phase 2 + Phase 3: SQL을 생성하고 신뢰도 점수를 함께 반환한다.
 
         Args:
             query: 자연어 질의
             schema_context: SchemaLinker.link()의 반환값 (schema_text 포함)
+            conversation_history: 이전 대화 이력 (Phase 3 멀티턴).
+                각 항목: {"question": str, "sql": str, "explanation": str}
 
         Returns:
-            생성된 SQL 문자열
+            {
+                "sql": str,         # 생성된 SQL 문자열
+                "confidence": float # logprob 기반 생성 신뢰도 (0~1)
+            }
         """
         schema_text = schema_context.get("schema_text", "")
         selected_examples = self._select_few_shot(query, schema_text)
 
-        # Section 4.3: 프롬프트 구성 - 역할 지시 + 스키마 + Few-shot + 오류 방지 지침 + 대상 질의
         few_shot_block = self._format_few_shot(selected_examples)
+        history_block = self._format_conversation_history(conversation_history or [])
 
         prompt = f"""You are an expert SQL query generator. Given a database schema and a natural language question, generate the correct SQL query.
 
@@ -123,8 +176,7 @@ class SQLGenerator:
 6. Do NOT use subqueries unless necessary.
 7. Return ONLY the SQL query, no explanations.
 
-{few_shot_block}
-
+{few_shot_block}{history_block}
 ## Question
 {query}
 
@@ -134,18 +186,50 @@ class SQLGenerator:
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=self.config["llm"]["temperature"],
-            max_tokens=self.config["llm"]["max_tokens"],
+            max_completion_tokens=self.config["llm"]["max_tokens"],
             messages=[{"role": "user", "content": prompt}],
+            logprobs=True,  # Phase 2: Confidence Scoring
         )
 
-        sql = response.choices[0].message.content.strip()
-        # SQL 코드 블록이 있으면 추출
-        if "```sql" in sql:
-            sql = sql.split("```sql")[1].split("```")[0].strip()
-        elif "```" in sql:
-            sql = sql.split("```")[1].split("```")[0].strip()
+        raw = response.choices[0].message.content.strip()
 
-        return sql
+        # SQL 코드 블록 추출
+        if "```sql" in raw:
+            sql = raw.split("```sql")[1].split("```")[0].strip()
+        elif "```" in raw:
+            sql = raw.split("```")[1].split("```")[0].strip()
+        else:
+            sql = raw
+
+        # Phase 2: Logprob 기반 신뢰도 계산
+        # 각 토큰의 log probability 평균 → exp → [0, 1] 범위의 기하평균 확률
+        confidence = self._compute_confidence(response)
+
+        return {"sql": sql, "confidence": confidence}
+
+    def _compute_confidence(self, response) -> float:
+        """
+        Phase 2: Logprob 기반 생성 신뢰도를 계산한다.
+
+        토큰별 log probability의 산술평균을 exp한 값 (기하평균 확률).
+        값이 높을수록 모델이 확신을 갖고 생성한 SQL임을 의미한다.
+
+        Returns:
+            float in [0, 1]. logprobs 미지원 시 0.5 반환.
+        """
+        try:
+            logprobs_content = response.choices[0].logprobs
+            if logprobs_content is None or not logprobs_content.content:
+                return 0.5
+            lps = [
+                t.logprob for t in logprobs_content.content
+                if t.logprob is not None
+            ]
+            if not lps:
+                return 0.5
+            return float(math.exp(sum(lps) / len(lps)))
+        except Exception:
+            return 0.5
 
     def _format_few_shot(self, examples: list[dict]) -> str:
         """선택된 few-shot 예시를 프롬프트 포맷으로 변환한다."""
@@ -159,3 +243,26 @@ class SQLGenerator:
             lines.append(f"SQL: {ex['sql']}")
 
         return "\n".join(lines)
+
+    def _format_conversation_history(self, history: list[dict]) -> str:
+        """
+        Phase 3: 이전 대화 이력을 프롬프트 블록으로 변환한다.
+
+        최대 최근 3턴만 포함 (프롬프트 길이 관리).
+        각 항목: {"question": str, "sql": str, "explanation": str (optional)}
+        """
+        if not history:
+            return ""
+
+        # 최근 3턴만 사용
+        recent = history[-3:]
+        lines = ["\n## Conversation History (recent turns)"]
+        for i, turn in enumerate(recent, 1):
+            q = turn.get("question", "")
+            sql = turn.get("sql", "")
+            if q and sql:
+                lines.append(f"\n### Turn {i}")
+                lines.append(f"Question: {q}")
+                lines.append(f"SQL: {sql}")
+
+        return "\n".join(lines) + "\n"

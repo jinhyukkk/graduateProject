@@ -50,6 +50,21 @@ export interface SchemaContext {
   foreign_keys: ForeignKey[];
 }
 
+// Phase 3: Guardrails info
+export interface GuardrailsInfo {
+  rows_truncated: boolean;
+  original_row_count: number;
+  low_confidence_warning: boolean;
+  warning_message: string;
+}
+
+// Phase 3: Conversation turn
+export interface ConversationTurn {
+  question: string;
+  sql: string;
+  explanation?: string;
+}
+
 // POST /api/query response
 export interface QueryResult {
   id: string;
@@ -65,6 +80,10 @@ export interface QueryResult {
   latency: number;
   validation: ValidationResult;
   verification: VerificationResult;
+  // Phase 2
+  sql_confidence?: number;
+  // Phase 3
+  guardrails?: GuardrailsInfo;
 }
 
 // ============================================================

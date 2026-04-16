@@ -67,7 +67,7 @@ class ResultExplainer:
         response = self.client.chat.completions.create(
             model=self.llm_model,
             temperature=0.3,  # 약간의 자연스러움을 위해 0.3
-            max_tokens=512,
+            max_completion_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content.strip()

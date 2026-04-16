@@ -71,7 +71,13 @@ export function useConfig() {
 
 export function useRunQuery() {
   return useMutation({
-    mutationFn: (payload: { query: string; db_id: string; dataset?: string }) =>
+    mutationFn: (payload: {
+      query: string;
+      db_id: string;
+      dataset?: string;
+      // Phase 3: 멀티턴 대화 히스토리
+      conversation_history?: Array<{ question: string; sql: string; explanation?: string }>;
+    }) =>
       fetchJson<QueryResult>('/api/query', {
         method: 'POST',
         body: JSON.stringify(payload),

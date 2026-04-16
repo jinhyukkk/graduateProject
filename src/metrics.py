@@ -1,6 +1,7 @@
 """
 평가 메트릭 (Section 5)
-EX (Execution Accuracy), CSR (Correction Success Rate), Avg Latency.
+EX (Execution Accuracy), CSR (Correction Success Rate), Avg Latency,
+Intent-Match Score (RQ1: NLI 기반 의미 일치 점수).
 """
 
 
@@ -51,6 +52,51 @@ def correction_success_rate(correction_logs: list[dict]) -> float:
         1 for log in error_cases if log.get("corrected_successfully", False)
     )
     return success_count / len(error_cases)
+
+
+def intent_match_score(
+    intent_logs: list[dict],
+    threshold: float = 0.75,
+) -> dict:
+    """
+    RQ1: 의도 일치 점수 — NLI 기반 의미 일치 점수의 집계 지표.
+
+    초록이 주장하는 "의도 일치 점수"를 평가 시점에 집계한다. 자연어 질의와
+    생성된 SQL의 역번역 사이의 NLI 유사도(0~1)를 항목별로 받아
+    (1) 평균 점수, (2) 임계값 통과율(consistency rate)을 반환한다.
+
+    Args:
+        intent_logs: 각 항목은 {"score": float, "is_consistent": bool}.
+            semantic_verifier.VerificationResult에서 수집한 값을 그대로 넣는다.
+            의미 검증이 수행되지 않은 항목은 호출 측에서 제외해 전달할 것.
+        threshold: 참고용 임계값(θ). 기본 0.75.
+
+    Returns:
+        {
+            "mean_score": float,        # 평균 NLI 점수
+            "consistency_rate": float,  # score >= threshold 비율
+            "n": int,                   # 집계된 항목 수
+            "threshold": float,
+        }
+    """
+    if not intent_logs:
+        return {
+            "mean_score": 0.0,
+            "consistency_rate": 0.0,
+            "n": 0,
+            "threshold": threshold,
+        }
+
+    scores = [float(log.get("score", 0.0)) for log in intent_logs]
+    consistent = sum(1 for log in intent_logs if log.get("is_consistent", False))
+    n = len(intent_logs)
+
+    return {
+        "mean_score": sum(scores) / n,
+        "consistency_rate": consistent / n,
+        "n": n,
+        "threshold": threshold,
+    }
 
 
 def average_latency(latency_logs: list[float]) -> float:

@@ -1,5 +1,5 @@
 llm:
-  model: "gpt-4o-2024-11-20"
+  model: "gpt-5.4-nano"
   temperature: 0.0
   max_tokens: 1024
 
@@ -27,6 +27,18 @@ evaluation:
   hrdb_db_path: "data/raw/hrdb/hrdb.sqlite"
   hrdb_metadata_path: "data/raw/hrdb/metadata.json"
 
+baselines:
+  dail_sql:
+    few_shot_k: 9                    # 논문 최적 k=9. 비용상 축소 시 논문에 명시.
+    skeleton_sim_threshold: 0.85     # SQL skeleton Jaccard 임계값 (논문 기본값)
+  mac_sql:
+    max_refine_rounds: 3     # MAC-SQL Refiner 최대 교정 횟수 (논문 기본값=3, Appendix A.3)
+    sqlite_timeout: 5.0      # SQL 실행 타임아웃 (초)
+    selector_char_threshold: 6000  # Selector 활성화 임계값(글자수). 논문: token수>0.8*max_seq_len
+
 output:
   results_dir: "outputs/logs/"
   checkpoint_dir: "outputs/checkpoints/"
+
+# Phase 3: LangGraph 오케스트레이터 (true → LangGraphSCTSQL, false → SCTSQL)
+use_langgraph: false

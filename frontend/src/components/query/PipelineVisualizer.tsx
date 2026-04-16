@@ -1,9 +1,10 @@
-import { Steps, Card } from 'antd';
+import { Typography } from 'antd';
 import {
   DatabaseOutlined,
   CodeOutlined,
   SyncOutlined,
   CheckCircleOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
 
 interface PipelineVisualizerProps {
@@ -11,27 +12,100 @@ interface PipelineVisualizerProps {
   isLoading: boolean;
 }
 
-const stepItems = [
-  { title: 'Schema Linking', icon: <DatabaseOutlined /> },
-  { title: 'SQL Generation', icon: <CodeOutlined /> },
-  { title: 'Self-Correction', icon: <SyncOutlined /> },
-  { title: 'Result', icon: <CheckCircleOutlined /> },
+const STEPS = [
+  { label: 'Schema Linking', sub: '관련 테이블 탐색', icon: DatabaseOutlined },
+  { label: 'SQL 생성', sub: 'Few-shot 프롬프팅', icon: CodeOutlined },
+  { label: '자기교정', sub: 'NLI + 실행 검증', icon: SyncOutlined },
+  { label: '완료', sub: '결과 반환', icon: CheckCircleOutlined },
 ];
 
-export default function PipelineVisualizer({
-  currentStep,
-  isLoading,
-}: PipelineVisualizerProps) {
+export default function PipelineVisualizer({ currentStep, isLoading }: PipelineVisualizerProps) {
   if (currentStep === 0 && !isLoading) return null;
 
+  // currentStep: 1=running step1, 2=running step2, 3=running step3, 4=all done
+  const activeIndex = isLoading ? currentStep - 1 : STEPS.length;
+
   return (
-    <Card size="small" title="Pipeline Progress" style={{ marginBottom: 16 }}>
-      <Steps
-        current={currentStep > 0 ? currentStep - 1 : 0}
-        status={isLoading ? 'process' : 'finish'}
-        items={stepItems}
-        size="small"
-      />
-    </Card>
+    <div
+      style={{
+        background: '#fff',
+        borderRadius: 8,
+        padding: 14,
+        border: '1px solid #f0f0f0',
+      }}
+    >
+      <Typography.Text
+        type="secondary"
+        style={{ fontSize: 11, display: 'block', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}
+      >
+        파이프라인
+      </Typography.Text>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {STEPS.map((step, idx) => {
+          const isDone = idx < activeIndex;
+          const isActive = idx === activeIndex;
+          const isPending = idx > activeIndex;
+
+          const Icon = isActive ? LoadingOutlined : step.icon;
+          const iconColor = isDone
+            ? '#52c41a'
+            : isActive
+            ? '#1677ff'
+            : '#d9d9d9';
+
+          const lineColor = isDone ? '#52c41a' : '#f0f0f0';
+
+          return (
+            <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              {/* 아이콘 + 연결선 */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 20 }}>
+                <div
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    background: isDone ? '#f6ffed' : isActive ? '#e6f4ff' : '#fafafa',
+                    border: `1px solid ${iconColor}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Icon
+                    style={{ fontSize: 10, color: iconColor }}
+                    spin={isActive}
+                  />
+                </div>
+                {idx < STEPS.length - 1 && (
+                  <div style={{ width: 1, height: 22, background: lineColor, marginTop: 2 }} />
+                )}
+              </div>
+
+              {/* 텍스트 */}
+              <div style={{ paddingBottom: idx < STEPS.length - 1 ? 8 : 0, paddingTop: 1 }}>
+                <Typography.Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: isActive ? 600 : 400,
+                    color: isPending ? '#bfbfbf' : isDone ? '#262626' : '#1677ff',
+                    display: 'block',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {step.label}
+                </Typography.Text>
+                <Typography.Text
+                  style={{ fontSize: 11, color: isPending ? '#d9d9d9' : '#8c8c8c', lineHeight: 1.4 }}
+                >
+                  {step.sub}
+                </Typography.Text>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
